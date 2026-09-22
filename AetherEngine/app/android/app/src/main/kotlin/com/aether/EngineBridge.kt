@@ -131,10 +131,9 @@ object EngineBridge : MethodCallHandler {
         }
     }
 
-    /// Platform device identity for the C2 request (snake reads a deviceId
-    /// before its POST). Android id is stable per install and needs no
-    /// dangerous permission, so it is used as the primary source with the
-    /// build fingerprint as a fallback.
+    /// รหัสอุปกรณ์สำหรับแสดงใน UI (offline — อ่านอย่างเดียว ไม่ส่งออก)
+    /// [CUT 2026-09-23] คอมเมนต์เดิมอ้าง "C2 request/POST" — ไม่มีโค้ดเน็ตแล้ว
+    /// (ดู docs/CUTS.md) เหลือแค่ ANDROID_ID → fallback BUILD.FINGERPRINT
     private fun getDeviceId(): String {
         val c = ctx ?: return "aether-android"
         return try {
