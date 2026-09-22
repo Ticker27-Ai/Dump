@@ -120,9 +120,7 @@ class _HomePageState extends State<HomePage> {
                         child: Row(
                           children: [
                             Expanded(child: Text(e.key)),
-                            Text('${e.value}',
-                                style: const TextStyle(
-                                    fontFeatures: [FontFeature.tabularFigures()])),
+                            Text('${e.value}'),
                           ],
                         ),
                       ),

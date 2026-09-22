@@ -1,0 +1,140 @@
+name: CI
+
+# รวม: (1) toolkit call-linkage ของ repo นี้ + (2) AetherEngine (lint/analyze/compile)
+# ที่มา: ดัดแปลงจาก AetherEngine/.github/workflows/ci.yml ให้ path อยู่ใต้ AetherEngine/
+# ตัด job local-test/evidence-gates ทิ้ง — test-stubs/ กับ scripts/ ไม่มีใน zip
+
+on:
+  push:
+    branches: [main, develop, arena/**]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  toolkit-test:
+    # Dump repo: rebuild call-linkage + parity + unit tests (python ล้วน)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Rebuild call-linkage + parity check
+        run: |
+          set -e
+          unzip -q Codes.zip
+          python3 tools/build_call_linkage.py --out build --compare
+      - name: Unit tests
+        run: python3 -m unittest tests.test_call_linkage
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify build configs
+        run: |
+          echo "=== Build config verification ==="
+          test -f AetherEngine/build.gradle.kts                || { echo "MISSING: root build.gradle.kts"; exit 1; }
+          test -f AetherEngine/settings.gradle.kts             || { echo "MISSING: root settings.gradle.kts"; exit 1; }
+          test -f AetherEngine/app/android/build.gradle        || { echo "MISSING: app/android/build.gradle"; exit 1; }
+          test -f AetherEngine/app/android/settings.gradle     || { echo "MISSING: app/android/settings.gradle"; exit 1; }
+          test -f AetherEngine/app/android/app/build.gradle    || { echo "MISSING: app/android/app/build.gradle"; exit 1; }
+          test -f AetherEngine/aether-core/build.gradle.kts    || { echo "MISSING: aether-core/build.gradle.kts"; exit 1; }
+          test -f AetherEngine/aether-android/aether-app/build.gradle.kts || { echo "MISSING: aether-android/aether-app/build.gradle.kts"; exit 1; }
+          # Unified engine: aether-layer ต้องถูก merge แล้ว (ไม่ควรมี directory นี้)
+          test ! -d AetherEngine/aether-layer || { echo "STALE: aether-layer/ ต้องถูกลบ (merged into aether-native)"; exit 1; }
+          # Unified native: layer sources ต้องอยู่ใน aether-native
+          test -f AetherEngine/aether-native/src/main/cpp/layer/bindmount/virtual_fs.cpp || { echo "MISSING: l1-sandbox merged source"; exit 1; }
+          test -f AetherEngine/aether-native/src/main/cpp/core/aob_scanner.cpp || { echo "MISSING: aob_scanner source"; exit 1; }
+          # Restructure 2026-09-23: Dart UI + ทะเบียนตัดต้องมี
+          test -f AetherEngine/app/lib/main.dart       || { echo "MISSING: Dart entry (app/lib/main.dart)"; exit 1; }
+          test -f AetherEngine/app/lib/engine_api.dart || { echo "MISSING: Dart bridge client (app/lib/engine_api.dart)"; exit 1; }
+          test -f AetherEngine/docs/CUTS.md            || { echo "MISSING: docs/CUTS.md"; exit 1; }
+          echo "All build configs verified."
+      - name: Offline gate (no URL literals in sources)
+        run: |
+          cd AetherEngine
+          if grep -rn "https\?://" --include="*.kt" --include="*.cpp" --include="*.hpp" --include="*.dart" . | grep -v third_party | grep .; then
+            echo "::error::URL literal in sources — violates offline policy (docs/CUTS.md)"
+            exit 1
+          fi
+          echo "Offline gate PASS."
+
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.22.x'
+          cache: true
+      - name: Flutter pub get + analyze
+        run: |
+          flutter pub get
+          flutter analyze --no-fatal-infos --no-fatal-warnings
+        working-directory: AetherEngine/app
+      - name: Flutter unit + widget tests
+        run: flutter test --reporter expanded
+        working-directory: AetherEngine/app
+
+  compile:
+    # ข้ามบน main: build-apk.yml ครอบคลุม gradle native compile + flutter build แล้ว
+    if: github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    needs: [toolkit-test, lint, analyze]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK & packages
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: '12.0'
+          accept-android-sdk-licenses: true
+          packages: 'platform-tools platforms;android-34 platforms;android-35 build-tools;34.0.0 ndk;26.1.10909125 cmake;3.22.1'
+
+      - name: Accept licenses
+        run: yes | sdkmanager --licenses > /dev/null 2>&1 || true
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.22.x'
+          cache: true
+
+      - name: Compile Kotlin modules + Native engine (root Gradle)
+        run: |
+          ./gradlew --no-daemon --console=plain \
+            :aether-core:compileDebugKotlin \
+            :aether-android:compileDebugKotlin \
+            :aether-native:externalNativeBuildDebug
+        working-directory: AetherEngine
+
+      - name: Flutter pub get
+        run: flutter pub get
+        working-directory: AetherEngine/app
+
+      - name: Build debug APK
+        run: flutter build apk --debug --no-tree-shake-icons
+        working-directory: AetherEngine/app
+
+      - name: Verify APK output
+        run: |
+          echo "=== APK output ==="
+          find AetherEngine/app/build/app/outputs -name "*.apk" -type f
+          APK_FILE=$(find AetherEngine/app/build/app/outputs -name "app-debug*.apk" -type f | head -1)
+          if [ -z "$APK_FILE" ]; then
+            APK_FILE=$(find AetherEngine/app/build/app/outputs -name "*.apk" -type f | head -1)
+          fi
+          if [ -z "$APK_FILE" ]; then
+            echo "::error::No APK found"
+            exit 1
+          fi
+          ls -lh "$APK_FILE"
+          echo "APK built successfully ($(du -h "$APK_FILE" | cut -f1))."
