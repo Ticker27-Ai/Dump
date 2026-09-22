@@ -1,0 +1,7 @@
+# regenerated call-linkage outputs (rebuild with tools/build_call_linkage.py)
+build/
+# extracted evidence bundle (reproducible from Codes.zip via `unzip Codes.zip`)
+Codes/
+# python caches
+__pycache__/
+*.pyc
