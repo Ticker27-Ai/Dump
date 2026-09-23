@@ -4,6 +4,8 @@ import android.app.Application
 import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.util.Log
+import com.aether.ProviderDisposition
+import com.aether.ProviderPolicy
 
 /**
  * VirtualAppLoader — port of prototype `jv0.O2()` (reference/NATIVE_CALLSITE_MAP.md
@@ -286,6 +288,16 @@ object VirtualAppLoader {
         val loader = guestCtx.classLoader
         var ok = 0
         for (providerClass in providers) {
+            // G2 (P1 batch 3): same policy as V2 (GuestRuntime) — default SKIP
+            // set identical; experiments flip ProviderFlags (single source).
+            val (disposition, why) = ProviderPolicy.policyFor(providerClass)
+            if (disposition == ProviderDisposition.SKIP) {
+                Log.i(TAG, "provider SKIP $providerClass ($why)")
+                continue
+            }
+            if (disposition == ProviderDisposition.GATED) {
+                Log.i(TAG, "provider GATED-TRY $providerClass ($why)")
+            }
             try {
                 val cls = loader.loadClass(providerClass)
                 val provider = cls.getDeclaredConstructor().newInstance()

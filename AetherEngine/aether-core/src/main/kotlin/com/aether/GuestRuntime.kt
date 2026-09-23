@@ -146,6 +146,8 @@ class GuestRuntime private constructor(
             }
         }
         providersInstalled = ok
+        Log.i(TAG, "installProviders → $ok/${providers.size} ok; " +
+            "skipped=${_skipped.map { it.first.substringAfterLast('.') }}")
         hookRegistry.onProvidersInstalled?.invoke(this, ok)
         return ok
     }
@@ -345,39 +347,17 @@ class GuestRuntime private constructor(
      */
     private fun installOneProvider(providerClass: String, loader: ClassLoader): Any? {
         return try {
-            // Skip GMS/ads/analytics providers that talk to Google Play services
-            // with the guest package name — under virtualization the calling UID
-            // is ours, so binder calls with the GUEST package fail with
-            // SecurityException (verified: dynamite measurement 'Unknown calling
-            // package name' kills main thread). These providers are NOT needed
-            // for the game itself to run; installing them only risks crashes.
-            // Skip ONLY providers that make external binder calls to GMS
-            // measurement/ads services during onCreate — these throw
-            // SecurityException on the main thread that disrupts game init
-            // even when caught by the firewall (aborts Handler dispatch).
-            // ★ GATED EXPERIMENT 2026-09-15 (device proof, apk 0955c54 round P4):
-            // FirebaseInitProvider สร้าง GMS measurement dynamite (m7.*) บน
-            // main-looper ของเรา → SE 'Unknown calling package name' หลุดจาก
-            // Handler.dispatchMessage = Zygote 'exited cleanly (0)' (ไม่มี
-            // FATAL/ANR/dropbox) — UncaughtExceptionHandler เป็นได้แค่ observer,
-            // ไม่ใช่ lifeline: ทุก build ก่อนหน้าจบแบบเดียวกันไม่ว่า chain/swallow
-            // snake/ninja รอดเพราะมีชั้น native กัน SE ลง worker (D5/P5) —
-            // interim: skip ตัวจุดชนวนหลัก; ย้ายเข้า virtual-broker (P5) แล้วคืน
-            if (providerClass == "com.google.firebase.provider.FirebaseInitProvider") {
-                return "skipped (FirebaseInitProvider → m7.* dynamite SE on main-looper; P5 replaces)"
+            // G2 (P1 batch 3): policy-driven allow-list (ProviderPolicy) — default
+            // behavior identical to the old blanket skip; each SKIP names the
+            // flag that re-opens it for the P4 device experiment.
+            val (disposition, why) = ProviderPolicy.policyFor(providerClass)
+            if (disposition == ProviderDisposition.SKIP) {
+                Log.i(TAG, "provider SKIP $providerClass ($why)")
+                return "skipped ($why)"
             }
-            val skipPrefixes = listOf(
-                "com.google.android.gms.ads",           // MobileAdsInitProvider → external
-                "com.google.android.gms.measurement",   // AppMeasurement → dynamite killer
-                "io.bidmachine.",                       // ads
-                "com.vungle.",                          // ads
-                "com.ironsource.",                      // ads
-                "com.applovin.",                        // ads
-                "com.facebook.ads.",                    // FB audience network
-            )
-            if (skipPrefixes.any { providerClass.startsWith(it) }) {
-                return "skipped (ads/measurement provider — unsafe under virtual UID)"
-            }
+            val gated = disposition == ProviderDisposition.GATED
+            val t0 = if (gated) android.os.SystemClock.elapsedRealtime() else 0L
+            if (gated) Log.i(TAG, "provider GATED-TRY $providerClass ($why)")
             val cls = loader.loadClass(providerClass)
             val provider = cls.getDeclaredConstructor().newInstance() as? ContentProvider
             if (provider == null) {
@@ -401,8 +381,11 @@ class GuestRuntime private constructor(
             } finally {
                 Binder.restoreCallingIdentity(token)
             }
+            if (gated) Log.i(TAG, "provider GATED-OK $providerClass " +
+                "(${android.os.SystemClock.elapsedRealtime() - t0}ms)")
             true
         } catch (e: Throwable) {
+            Log.w(TAG, "provider FAIL $providerClass: ${e.javaClass.simpleName}: ${e.message}")
             "${e.javaClass.simpleName}: ${e.message}"
         }
     }
