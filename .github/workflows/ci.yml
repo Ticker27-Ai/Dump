@@ -110,11 +110,21 @@ jobs:
 
       - name: Compile Kotlin modules + Native engine (root Gradle)
         run: |
-          ./gradlew --no-daemon --console=plain \
+          set -o pipefail
+          ./gradlew --no-daemon --console=plain --stacktrace \
             :aether-core:compileDebugKotlin \
             :aether-android:compileDebugKotlin \
-            :aether-native:externalNativeBuildDebug
+            :aether-native:externalNativeBuildDebug 2>&1 | tee gradle-compile.log
         working-directory: AetherEngine
+
+      - name: Upload gradle log (debug aid — always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-compile-log
+          path: AetherEngine/gradle-compile.log
+          retention-days: 3
+          if-no-files-found: warn
 
       - name: Flutter pub get
         run: flutter pub get
