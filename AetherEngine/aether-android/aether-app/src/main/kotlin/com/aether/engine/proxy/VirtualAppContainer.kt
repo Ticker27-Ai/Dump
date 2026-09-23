@@ -3,6 +3,7 @@ package com.aether.engine.proxy
 import android.app.Application
 import android.content.Context
 import android.content.pm.ApplicationInfo
+import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.util.Log
 import com.aether.SandboxManager
@@ -308,6 +309,31 @@ object VirtualAppContainer {
      */
     fun overridePackageName(): String {
         return fakePackageName
+    }
+
+    /**
+     * G1 (P1 batch 1): getPackageInfo(guest) fallback — ใช้เมื่อ real PMS ไม่
+     * รู้จัก guest (copy-APK track: guest อยู่แค่ใน sandbox ไม่ได้ติดตั้งจริง)
+     * อ่าน identity จาก sandbox APK ผ่าน getPackageArchiveInfo (file copy —
+     * ไม่ต้อง root) แล้ว patch packageName/applicationInfo ให้ตรง guest เพื่อ
+     * ให้ GMS/Firebase SDK เห็นข้อมูลครบ (version/signatures จาก APK จริง)
+     * คืน null ถ้าอ่าน APK ไม่ได้ (caller ต้อง rethrow NameNotFound เดิม)
+     */
+    @Suppress("DEPRECATION")
+    fun overridePackageInfo(packageName: String, flags: Int): PackageInfo? {
+        if (packageName != fakePackageName) {
+            return runCatching {
+                realContext?.packageManager?.getPackageInfo(packageName, flags)
+            }.getOrNull()
+        }
+        val apk = overrideSourceDir()
+        if (apk.isEmpty()) return null
+        val pm = realContext?.packageManager ?: return null
+        val info = runCatching { pm.getPackageArchiveInfo(apk, flags) }.getOrNull()
+            ?: return null
+        info.packageName = fakePackageName
+        fakeApplicationInfo?.let { info.applicationInfo = it }
+        return info
     }
 
     /**

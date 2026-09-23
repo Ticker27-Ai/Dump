@@ -4,7 +4,7 @@
 (ของเดิมอ้าง `docs/CUTS.md` แต่ไม่มีไฟล์นี้ใน repo — สร้างเมื่อ 2026-09-23;
 รายการก่อนหน้านั้นปะติดปะต่อจากคอมเมนต์ในโค้ดเท่านั้น)
 
-## นโยบาย (มีผลตั้งแต่ 2026-09-23)
+## นโยบาย (มีผลตั้งแต่ 2026-09-23 — **แก้โดยคำสั่งเจ้าของวันเดียวกัน ดู §คืนโมดูลข้างล่าง**)
 
 1. **offline-only** — ห้ามมี URL/endpoint/การดึงข้อมูลผ่านเน็ตในซอร์ส
    ข้อยกเว้นเดียวคือ WebView ที่ผู้ใช้กดเปิดเอง (`InternalWebBrowser`
@@ -14,6 +14,13 @@
    ห้ามโหลดไบนารี Snake (`libengine.so`) หรือเรียก endpoint ของเขา
 3. จะเพิ่ม network ใด ๆ กลับมา = ต้องลงทะเบียนในไฟล์นี้ก่อน
    (บอกเหตุผล + endpoint + ไฟล์ที่แตะ) แล้วค่อยเขียนโค้ด
+
+## 2026-09-23 — เจ้าของสั่งคืน license/C2 แบบ FULL (proof phase)
+
+- ข้อ 1–2 **พักใช้ชั่วคราว**เพื่อพิสูจน์ parity เต็ม; ข้อ 3 (ลงทะเบียนก่อนเพิ่ม network) **ยังมีผล**
+- NET-1..4 + REN-1 คืนชีพในรูป **โมดูลแยก** (`license/` = นโยบาย, `c2/` = ขนส่ง, core เรียกผ่าน interface + flag อิสระ) ตาม `SNAKE_PARITY_PLAN.md` §License/C2 FULL track — พิสูจน์ก่อน แล้วค่อยยืดหยุ่น (ปิด/ลบ/สลับ endpoint ได้โดย core ไม่แตะ)
+- **BIN-1 ยังคงตัด** (ไม่โหลด `libengine.so`) จนกว่าเจ้าของจะสั่งเปลี่ยน
+- Endpoint ที่ลงทะเบียน: `ENDPOINT_LIVE = https://rest.snakeseller.com/api/request/` (registry อย่างเดียว — default วิ่ง mock, ห้ามยิง live จนกว่าเจ้าของสั่งชัดตาม G-LC3) + topup `https://www.snakeengine.com/topup/` + oauth `https://snakeengine.com/oauth/google` — ทั้งสามเก็บเป็น host/path แยกชิ้นใน `aether-core/.../c2/Endpoints.kt` (ไม่มี URL literal ทั้งเส้น — CI offline gate ยังเขียว)
 
 ## 2026-09-23 — ตัด C2/ใบอนุญาต (restructure รอบ snake-parity)
 

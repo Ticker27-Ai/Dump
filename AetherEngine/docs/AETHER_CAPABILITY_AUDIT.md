@@ -77,7 +77,7 @@
 | JNI สำรอง (`nativeProcessTriple`, `nativeReflectUpdate`) | ประกาศ+register แต่ไม่เรียก | 0 caller ฝั่ง Kotlin |
 | ตัว JNI ที่เรียกแต่ไส้ว่าง (`nativeInitContext`, `nativeProcessPair`) | เรียกจริงแต่ native body = NOOP | `aether_core.cpp` ไม่มี implementation |
 | ตัวอ่าน crash (`getLatestCrashLog`, `getCrashLogs`, `clearCrashLogs`, `getCrashDir`), `RemoteConfig.addListener`, `Bridge.setMode`, `suspend/resume` | 0 caller ทั้งหมด | ตายเรียบ |
-| ยูทิลิตี patch (`UnitySoPatcher`, `SoPatchApplier`, `DepthPatch`) | 0 caller | โค้ดลอย |
+| ยูทิลิตี patch (`UnitySoPatcher`, `SoPatchApplier`, `DepthPatch`) | **PHANTOM — ไม่มีใน repo** (ดู §9: รายงานรอบแรกอ้างผิด ไม่มีไฟล์/สัญลักษณ์นี้เลย) |
 | `ProxyPendingActivity.create`, `AetherFileProvider` | manifest/โค้ดมี แต่ไม่มีผู้ใช้ใน repo | surface ว่าง |
 | `AetherStubReceiver` (exported) | มีคนฟัง ไม่มีคนส่ง — ใน repo ไม่มีผู้ส่ง broadcast นี้ | เรียกได้จากภายนอกเท่านั้น (กันด้วย signature permission) |
 | โปรโตคอล `route` ของ `ProxyContentProvider` | มีแต่ฝั่งเซิร์ฟเวอร์ ไม่มีผู้ส่ง | โค้ดระบุเองว่า reserved |
@@ -137,5 +137,107 @@ Flutter/Dart → `EngineBridge` (MethodChannel) → `AetherOrchestrator.launchIn
 - `aether-android/.../app/` — `AetherApp`, `EngineLoader`, `CrashHandler`, `DaemonService`, `AetherDaemon(+Inner)Service`, `OAuthFlow`, `InternalWebBrowser`, `RemoteConfig`, `AetherSystemCallProvider`, `AetherStubReceiver`, `AetherFileProvider`, `DiagLog`, `Flagger`, manifest ฝั่ง engine
 - `aether-android/.../proxy/` — `AetherOrchestrator`, `ProxyActivity`, `ProxyService`, `ProxyJobService`, `ProxyContentProvider`, `TransparentProxyActivity`, `ProxyPendingActivity`, `VirtualAppContainer`, `VirtualAppLoader`, `GuestRuntimeBridge`, `GuestProcessRegistry`, `ServiceBinderProxy`, `HCallbackProxy`, `AetherInstrumentation`, `IntentParser`, `AetherIpcBridge`, `VirtualFSWrapper`
 - `aether-android/.../vpn/` — `AetherVpnService`
-- `aether-core` — `SandboxManager`, `GuestRuntime`, `Bridge`, `VirtualFS`, `AetherIpc`, `PackageConfParser`, `VdexPatcher`(ผ่าน orchestrator), `Engine` (ประกาศ JNI)
+- `aether-core` — มีแค่ 5 ไฟล์: `SandboxManager` (มี `provisionVdexStubs()` + `mountSandbox` + `generatePackageConf`), `GuestRuntime` (มี `suspend/resume` ที่ dead), `PackageConfParser`, `RemoteConfig`, `Engine` (ประกาศ JNI) — ชื่อ `Bridge`/`VirtualFS`/`AetherIpc`/`VdexPatcher` ในรายงานรอบแรกเรียกเพี้ยน (ของจริง: `GuestRuntimeBridge.RuntimeMode`, `VirtualFSWrapper`, `AetherIpcBridge` ใน `ProxyContentProvider.kt`, ฟังก์ชัน `provisionVdexStubs`) — ดู §9
+- `aether-android/.../proxy/MethodUtils.kt` — **รอบแรกตกหล่น**: มีจริง 7 เมธอด mirror ของ Snake ครบ แต่ **0 caller (DEAD)** — ต้อง wire ในงาน P2/P3 ไม่ใช่สร้างใหม่
 - `aether-native` — `aether_core.cpp`, `jni_hook.cpp`, `key_store`, `mem_reader`, `module_resolver`, `payload_store`, `stealth`, `aob`, `binder`, `class_map`, `config`, `crypto`, `flagger`, `virtual_fs`, JNI `Engine_*`
+
+---
+
+## 8. Deep dive: หลักการทำงานแบบทะลุปรุโปร่ง (2026-09-23 รอบ 2)
+
+### 8.1 EngineBridge คืออะไรกันแน่ (515 บรรทัด — อ่านครบแล้ว)
+
+`EngineBridge` (`app/android/.../com/aether/EngineBridge.kt`) เป็น `object : MethodCallHandler` ช่อง `com.aether/engine_bridge` รับ 15 เมธอดจาก Dart — แต่หน้าที่จริงมี **2 ครึ่ง**:
+
+1. **เจ้าของ channel คนเดียว** — ไม่มีมัน Dart ทั้ง 15 เมธอดพังทันที (`MissingPluginException`) หน้าแอพที่ติดตั้งกลายเป็นจอตาย
+2. **fast-path ของบูตครึ่งหลัง** — `init()` (ถูกเรียกจาก `AetherHostActivity.configureFlutterEngine` เพียงที่เดียว) ทำ `orchestrator.init` (ถ้ายัง) → `attachToProcess(ownPid, "", "com.aether")` → `startEngine()` ในโปรเซส main แบบ synchronous ตั้งแต่เปิด activity
+3. **ทางเข้าเดียวของ 15 ปฏิบัติการ** — ทุกเมธอดเป็น `private fun` ที่ส่งต่อไป Orchestrator/Native (ตาราง §8.2) ไม่มี entry อื่นใน repo
+
+### 8.2 แผนที่ 15 เมธอด → ปลายทาง
+
+| เมธอด Dart | EngineBridge ส่งต่อไปที่ | เงื่อนไขก่อนทำงาน |
+|---|---|---|
+| `isTargetInstalled` / `getInstalledGameInfo` | `PackageManager` ตรง ๆ | มี context |
+| `getDeviceId` | `ANDROID_ID` → fallback fingerprint (offline) | มี context |
+| `getEngineStats` | `Orchestrator.getStats()` | — (อ่านค่าเฉย ๆ) |
+| `getVirtualAppStatus` | `VirtualAppContainer` + `Engine.classRuleCount()` | — |
+| `testVirtualFS` | `VirtualAppContainer.testVirtualFSResolve()` | — |
+| `readMemory` | `nativeFindModuleBase` + `Orchestrator.readMemory` (≤4096B, คืน hex+ascii) | **ต้อง attached** |
+| `scanAOB` | `nativeFindModuleBase` + `nativeScanAOB` (256KB จาก base) | **ต้อง attached** |
+| `nativeCompute` | `Engine.nativeCompute` (คืน hex 8 ไบต์) | lib โหลดแล้ว |
+| `compressPayload` | `Engine.nativeCompressPayload` (hex↔hex) | lib โหลดแล้ว |
+| `launchApp` | `getLaunchIntentForPackage` + `startActivity` (opt-in เปิดแอพนอก) | แอพมีอยู่จริง |
+| `launchInSandbox` | `Orchestrator.launchInSandbox` + `launchResultAwait` (poll ไฟล์ 4.2s) | **orchestrator initialized** |
+| `readDiag` | อ่านไฟล์ `diag/trace.log` + `logcat_*` (400 บรรทัดท้าย) + `crash_*.log` (80 บรรทัดท้าย) | — |
+| `chainCheck` | ตรวจ 7 ขั้นในโปรเซส main เอง (identity/sCache/HCallback/AMS/slot/childConfig/installed) | — |
+| `handshakeStatus` | `ContentResolver.call` เมธอด `_Engine_|_init_process_` จริงด้วย DIAG slot สุดท้าย | provider `:pN` ตอบ |
+
+### 8.3 บูตแยก 3 ทาง (split boot) — ทำไมตัดชิ้นใดชิ้นหนึ่งแล้วไม่ตายทั้งระบบ
+
+| เส้นทาง | ใครทำ | เมื่อไร | ได้อะไร |
+|---|---|---|---|
+| **A. `AetherApp.onCreate`** (ทุกโปรเซส) | exempt hidden-API → `DiagLog.init` → `nativeInitContext` (main/child เท่านั้น, ไส้ว่าง) → `Flagger/RemoteConfig.init` + `fetchAsync` → `nativeHydratePayloads` (สแกน `root/files/`) → `CrashHandler.install` → `Orchestrator.init` → สตาร์ท `AetherDaemonService` | เปิดแอพ/โปรเซสเกิด | lib + โฟลเดอร์ + crash + orchestrator(initialized) + daemon |
+| **B. `EngineBridge.init`** (main เท่านั้น) | `orchestrator.init` (ถ้ายัง) → `attachToProcess` → `startEngine` + ลงทะเบียน channel | Flutter activity เปิด (`configureFlutterEngine`) | attached + running + UI ใช้ได้ — **เร็วสุด (synchronous)** |
+| **C. watchdog ใน `AetherDaemonService`** (main — ไม่มี `android:process` ใน manifest จึงไม่ใช่ `:engine`) | ลูปทุก 3 วินาที 5 เคส: ยังไม่ init→init+attach / init แล้วไม่ attach→`doSelfAttach` / attach แล้วไม่ running→`startEngine` / running แต่ native เสีย 3 ครั้ง→re-attach / ครบ→healthy | หลัง daemon สตาร์ท (~วินาที) | **ตาข่ายนิรภัย**: ไม่มี B ก็ attach+start ได้เองภายใน ~9 วินาที |
+
+### 8.4 "ถ้าไม่มี EngineBridge จะเกิดอะไร" (ตอบด้วยหลักฐาน ไม่ใช่เดา)
+
+| ส่วน | ผล | เหตุผล |
+|---|---|---|
+| หน้า Flutter ที่ติดตั้ง | **ตายสนิท** — ทุกปุ่มพัง | ไม่มี handler ให้ channel (มีที่เดียวคือ `EngineBridge.init` จาก `AetherHostActivity`) |
+| บูต engine (lib/sandbox/crash/init/daemon) | **รอดทั้งหมด** | อยู่ใน `AetherApp` ไม่ได้อ้าง EngineBridge (มีแค่คอมเมนต์เอ่ยชื่อ) |
+| attached/running ใน main | **รอดช้าลง** (~3–9 วินาทีแทนทันที) | watchdog เคส 5→1→2 ทำแทน (`doSelfAttach` + `startEngine`) |
+| `readMemory`/`scanAOB`/`chainCheck`/diag | **เรียกไม่ได้** (ไม่ใช่พัง — คือไม่มีทางเรียก) | caller เดียวใน repo คือเมธอด private ของ EngineBridge |
+| `launchInSandbox` | **โค้ดพร้อม แต่ไม่มีใครกด** — ต้องการแค่ initialized (ไม่ต้องการ attached) และเรียก `startEngine()` เองข้างใน; เหลือทางเดียวคือ adb ยิง `ProxyActivity` (exported=true) ตรง ๆ ซึ่ง**ข้าม** slot/handshake/bootstrap — `ProxyActivity` จะ seed slot จาก extra + ใช้ `target_package` จาก intent (default `com.aether` = ไม่ virtual = แค่ self-attach แล้วจบ) = โหมดพิการ |
+| `:pN` / `:engine` | **ไม่กระทบ** | `ProxyActivity` self-attach เอง, daemon ไม่แตะ EngineBridge |
+
+สรุปประโยคเดียว: **EngineBridge ไม่ใช่แค่สะพาน UI — มันคือรีโมตกดปุ่มทั้ง 15 ปุ่ม + สตาร์ทเครื่องทางลัด; ถอดมันออกเครื่องยนต์ยังติด (บูต+watchdog) แต่ไม่มีพวงมาลัย ไม่มีคันเร่ง ไม่มีหน้าปัด — เหลือแต่ adb เจาะผ่านประตู exported ที่เปิดอ้าอยู่**
+
+### 8.5 โซ่เต็มเส้น — กดปุ่ม launch 1 ครั้งเกิดอะไรบ้าง (6 ด่าน)
+
+1. **Dart** `launchInSandbox(pkg)` → channel → `EngineBridge.launchInSandbox` (ตรวจ context/pkg ว่าง)
+2. **`Orchestrator.launchInSandbox`**: ต้องการ initialized → เคลียร์ container ถ้า target เปลี่ยน → `VirtualAppContainer.init+setup` (ปลอม package) → `bootstrapGameData+mountSandbox` → `startEngine()` → `GuestProcessTable.allocate` (slot 0–3, เต็ม = ปฏิเสธแบบ a7:317) → `spawnAndConfig` handshake ผ่าน provider (ปลุก `:pN` + ส่ง config + `linkToDeath`) → ยิง `ProxyActivity$P<slot>` พร้อม `target_package`/`target_sandbox`/`EXTRA_SLOT`
+3. **`:pN` `ProxyActivity.onCreate`**: `DiagLog.init` → ตัดสิน identity (p3-config ชนะ intent ยกเว้นของ diag) → seed slot (ถ้าไม่มี handshake) → `VirtualAppContainer.init+setup` รอบโปรเซสลูก → self-attach + `startEngine` ของตัวเอง
+4. **โหลด guest** (`GuestRuntimeBridge.load`): v2 `GuestRuntime` ผูก Application/Resources 3 รอบ + ปลอมชื่อโปรเซส + `nativeSetSeed(SDK)` + ติดตั้ง provider ของ guest ข้าม Firebase/โฆษณา → ปลด `HCallbackProxy`
+5. **สลับร่าง** (`AetherInstrumentation`): `newActivity` สร้าง stub แล้วสลับเป็น guest class + `FORCE-GUEST Resources` → `recreate()` รีสตาร์ทเป็น guest เต็มตัว
+6. **รายงานผลข้ามโปรเซส**: `:pN` เขียน `diag/launch_result.json` → `launchResultAwait` ใน main poll ทุก 400ms × 10 (4.2s) + ตรวจ `ts` ใหม่กว่าเวลากด (กันผลค้าง) → คืน Map ให้ Dart; ถ้าเงียบ = `pending` ให้กด Diag ดู trace
+
+### 8.6 สิ่งที่รอบแรกพูดไม่คม (แก้ไขตามคำท้วง)
+
+- รอบแรกระบุ EngineBridge ว่า "สะพาน MethodChannel" เฉย ๆ — **จริง ๆ มีบทบาทบูต (attach+start fast-path)** และเป็น single entry ของ 15 ปฏิบัติการ (เพิ่ม §8.1–8.2)
+- รอบแรกบอก daemon อยู่ `:engine` — **จริง ๆ `AetherDaemonService` ไม่มี `android:process` ใน manifest จึงรันใน main** (มีแค่ `InnerService` ที่อยู่ `:engine`) ทำให้ watchdog เป็นตาข่ายของ main ไม่ใช่ของ `:engine` (แก้ §8.3)
+- รอบแรกบอก "launch เข้าถึงได้ผ่าน adb" ลอย ๆ — **จริง ๆ ทาง adb ข้าม 3 ด่าน (slot/handshake/bootstrap) และ default ไม่ virtual** (เพิ่ม §8.4)
+
+---
+
+## 9. สแกน repo ให้ครบจริง (2026-09-23 รอบ 3 — ปิดช่องที่รอบแรกพลาด)
+
+รอบแรกอ้าง "100%" แต่สแกนแค่ซอร์สหลัก — รอบนี้เดินทุกไฟล์ใน repo (143 ไฟล์ ไม่นับ build) แล้ว ผล:
+
+### 9.1 ไฟล์ที่ตกหล่น (อ่านครบแล้ว)
+
+| ไฟล์ | สิ่งที่พบ |
+|---|---|
+| `proxy/MethodUtils.kt` | มีจริง 7 เมธอด (mirror Snake 6 + ctor overload) แต่ **0 caller = DEAD** — แก้ `SNAKE_EVIDENCE_AUDIT §2.3`: ไม่ใช่ "ขาด" แต่เป็น "มีแต่ไม่ต่อ" |
+| `res/values/strings.xml` | แค่ label/description ของ permission IPC (ไม่มี `engine_service_name` แบบ Snake — Aether hardcode `:engine` ใน manifest) |
+| `res/xml/file_paths.xml` | FileProvider paths: `sandbox/`, `config/`, cache, external |
+| `docs/AETHER_RESTRUCTURE.md` | รายงานตัด C2 (NET-1..4/BIN-1/REN-1): เคยมี `CONFIG_ENDPOINT=rest.snakeseller.com` + `fetchRemotePglMap/Version` + `EngineType.SNAKE` — ตัดหมดแล้วตาม `CUTS.md` |
+| `docs/CALL_LINKAGE_GUIDE.md` + `tools/call_linkage/` (3,485 บรรทัด) + `tests/` | toolkit สร้างกราฟ instruction→callee 6 layers (691 edges/1048 nodes/11 chains) จาก `Codes/SnakeLogic` — stdlib ล้วน, CI รันเทสต์ 16 ข้อผ่าน |
+| `app/build.gradle` | `com.aether`, minSdk 28, **arm64-only**, R8 OFF (กัน JNI/reflection พัง), CI debug-keystore signing; คอมเมนต์ล็อก **"GAME version 56.23.2 fixed at build time"** |
+| `aether-native/.../CMakeLists.txt` | `libaether.so` จาก 13 core TU + `virtual_fs.cpp` + lz4; เคยตัด `manifest_snapshot` (C++ duplicate ไม่มี caller) + `hide_module` (ต้อง root) |
+| `app/assets/` (SVG โซเชียล 5 + ฟอนต์ 4) | **ของ Snake** (ชื่อไฟล์ตรง F1 เป๊ะ) เพิ่มมาตั้งแต่ restructure (`ab3b5df`) ประกาศใน pubspec (`flutter_svg`) แต่ **Dart ไม่เรียกใช้เลย** — ของ stage ไว้งาน C |
+
+### 9.2 รายงานรอบแรกที่ต้องแก้ (phantom + ชื่อเพี้ยน)
+
+| ข้อ | ความจริง |
+|---|---|
+| `UnitySoPatcher`/`SoPatchApplier`/`DepthPatch` "0 caller" | **PHANTOM** — ไม่มีไฟล์/สัญลักษณ์นี้ใน repo เลย (§3.3 แก้แล้ว) |
+| `object Bridge` + `Bridge.setMode` + "DUAL default" | ของจริงคือ `GuestRuntimeBridge.RuntimeMode` (enum) + `setMode` (0 caller ✓ dead ถูก) + **default คือ AUTO ไม่ใช่ DUAL** |
+| `VirtualFS` / `AetherIpc` / `VdexPatcher` (ภาคผนวก) | ชื่อจริง: `VirtualFSWrapper` / `AetherIpcBridge` (ใน `ProxyContentProvider.kt`) / ฟังก์ชัน `provisionVdexStubs()` |
+| `suspend/resume` "0 caller" | ยืนยันถูก — มีจริง (`GuestRuntime.kt:179/185`) ไม่มี caller |
+| `reference/NATIVE_CALLSITE_MAP.md`, `scripts/native_chain_parity.py` (คอมเมนต์ใน `GuestProcessRegistry.kt` อ้าง) | **ไม่มีใน repo** — dangling reference (หนี้เอกสาร — P1 ควรแก้คอมเมนต์ให้ชี้ `AetherEngine/docs/` แทน) |
+| README ว่า daemon อยู่ `:engine` | เพี้ยน (มีแค่ InnerService ที่ `:engine` — ดู §8.3) |
+
+### 9.3 สถานะการสแกนหลังรอบ 3
+
+อ่านแล้ว: Kotlin 37 + Dart 3 + C/C++ 30 + manifests + res/xml + build/config + docs 6 + tools/tests (survey หัวไฟล์+สถาปัตยกรรม) + โฟลเดอร์ assets — **ครบ 143 ไฟล์ ไม่เหลือ blind spot ระดับไฟล์** (เหลือแค่ body พฤติกรรมฝั่ง Snake ที่ต้อง runtime — งาน P4)

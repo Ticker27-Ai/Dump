@@ -196,6 +196,16 @@ object GuestProcessHolder {
                 putString(GuestProcessTable.EXTRA_ERROR, "bad config")
             }
         }
+        // P1 same-app handshake (P2 reject semantics): child ปฏิเสธ caller
+        // ต่าง UID — กันแอพอื่นมา touch provider แล้วยึด/ขโมย slot
+        val caller = Binder.getCallingUid()
+        if (caller != android.os.Process.myUid()) {
+            Log.e(TAG, "Reject init: cross-uid caller $caller (process uid ${android.os.Process.myUid()})")
+            return Bundle().apply {
+                putBoolean(GuestProcessTable.EXTRA_SUCCESS, false)
+                putString(GuestProcessTable.EXTRA_ERROR, "reject:cross-uid")
+            }
+        }
         val cur = config
         if (cur != null && cur.guestPkg != pkg && cur.guestPkg != DIAG_PKG) {
             // jv0.P2: "Reject init process: X, this process is: Y"

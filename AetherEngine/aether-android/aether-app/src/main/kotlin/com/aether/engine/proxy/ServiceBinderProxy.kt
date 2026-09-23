@@ -567,6 +567,31 @@ object ServiceBinderProxy {
                     }
                 }
 
+                // G1 (P1 batch 1): getPackageInfo(guest) — real PMS ตอบได้ก็ต่อเมื่อ
+                // guest ติดตั้งจริงบนเครื่อง (no-root track หลัก); ถ้า NameNotFound
+                // (copy-APK track) อ่าน identity จาก sandbox APK แทน เพื่อให้
+                // GMS/Firebase SDK เห็นข้อมูล guest ครบแทน crash ด้วย NNFE
+                if (method.name == "getPackageInfo" && args != null && args.isNotEmpty()) {
+                    val pkg = args[0] as? String
+                    if (pkg == overridePackage && overridePackage.isNotEmpty()) {
+                        val flags = when (val f = args.getOrNull(1)) {
+                            is Int -> f
+                            is Long -> f.toInt()
+                            else -> 0
+                        }
+                        try {
+                            return method.invoke(realIface, *args)
+                        } catch (e: java.lang.reflect.InvocationTargetException) {
+                            val cause = e.cause
+                            if (cause is android.content.pm.PackageManager.NameNotFoundException) {
+                                return VirtualAppContainer.overridePackageInfo(pkg, flags)
+                                    ?: throw cause
+                            }
+                            throw cause ?: e
+                        }
+                    }
+                }
+
                 // ★ SNAKE caller-contract (device 13:01:48.530): ระบบจริงตรวจ
                 // 'caller package ∈ process ของ uid' — process เราคือ com.aether
                 // (u0a756); op-package ที่เรา spoof เป็น guest ใน framework ทำให้
