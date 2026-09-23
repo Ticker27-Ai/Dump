@@ -179,3 +179,31 @@ C2 report §17 (Evidence Contamination Warning) ระบุชัด: **`com.sn
 | guest components ใน conf | AppLovin, **Pangle** (`bytedance.openadsdk` ครบชุด activity), Fyber/Inneractive, SuperAwesome — guest หนักโฆษณา | CONFIRMED |
 
 นัยต่อแผน: guest = eightballpool **56.23.2 ล็อกแล้ว** (มี split APK — installer P3 ต้องรองรับ splits); parser package.conf ต้องเขียนตามฟอร์แมต custom นี้ (u16len+UTF-16 + tag คลาส); PGL = encrypted payload (ห้ามแกะ — ใช้แบบ opaque ตามนโยบาย)
+
+---
+
+## 8. Repo-scan corrections (2026-09-23 — ปิด blind spots รอบแรก + แก้ "26 binders")
+
+### 8.1 ของที่รอบแรกอ้างผิด
+
+| ข้อ | ความจริง |
+|---|---|
+| `MethodUtils` "ขาด" (§2.3) | **มีอยู่แล้ว** (`proxy/MethodUtils.kt`, 7 เมธอด) แต่ **0 caller** — สถานะที่ถูกคือ exists-but-dead (ต้อง wire ใน P2/P3 ไม่ใช่สร้างใหม่) |
+| `UnitySoPatcher`/`SoPatchApplier`/`DepthPatch` "0 caller" | **PHANTOM** — ไม่มีไฟล์/สัญลักษณ์นี้ใน repo เลย |
+| `object Bridge` + "DUAL default" | ของจริงคือ `GuestRuntimeBridge.RuntimeMode` (enum) — `setMode` 0 caller ถูก แต่ **default คือ AUTO ไม่ใช่ DUAL** |
+| `VirtualFS`/`AetherIpc`/`VdexPatcher` (ชื่อในรายงาน) | ชื่อจริง: `VirtualFSWrapper` / `AetherIpcBridge` (ใน `ProxyContentProvider.kt`) / ฟังก์ชัน `provisionVdexStubs()` |
+| คอมเมนต์อ้าง `reference/…` + `scripts/…` | ไม่มีใน repo (dangling) — แก้แล้วใน P1 ให้ชี้ `snake.zip` + `docs/` |
+| README ว่า daemon อยู่ `:engine` | เพี้ยน — มีแค่ InnerService ที่ `:engine` (main-process Daemon ยืนตาม §8.3 capability audit) |
+
+### 8.2 "26 Stub$Proxy" ไม่ใช่รายชื่อ services (แก้แผน P1)
+
+ดึงรายชื่อจริงจาก `classes.dex` (26 ตรง): ทั้งหมดคือ **callback/observer interfaces ฝั่ง client** — `IIntentReceiver`, `IServiceConnection`, `IJobService`/`IJobCallback`, `IPackageInstallObserver(2)`/`IPackageInstallerSession`/`IPackageInstallerCallback`/`IPackageDataObserver`/`IPackageDeleteObserver2`, `IContentObserver`, `ISyncAdapter`/`ISyncContext`/`ISyncStatusObserver`, `IAccountAuthenticator(Response)`/`IAccountManagerResponse`, `ILocationListener`, `IStopUserCallback`, `IWallpaperManagerCallback`, `IWifiScanner`, `ISystemUpdateManager`, `INotificationSideChannel`, `IResultReceiver(2)` — มีแค่ `IConnectivityManager` ที่เป็น service manager ตรง ๆ
+
+- ผล: เลิกกรอบ "ขยาย 11 → 26 services" — แทนด้วย **11 → 15 ตามหลักฐาน** (P1 batch 4): `activity_task` (ATMS จำเป็นบน Q+), `connectivity` (อยู่ใน 26 + แก้ mapping ผิด `android.net.ConnectivityManager`), `packageinstaller` (IPackageInstaller* ใน 26 → installer (H)), `alarm` (datatransport scheduler ใน guest manifest)
+- 26 รายการนี้ย้ายไปเป็นหลักฐานงาน **P2 lifecycle** แทน (JobService/ServiceConnection/IntentReceiver/install-observers = สิ่งที่ ProxyService/JobService/BroadcastReceiver ต้องรองรับ)
+
+### 8.3 ข้อเท็จจริงรอบสแกนเต็ม (143 ไฟล์)
+
+- `app/assets/`: SVG โซเชียล + ฟอนต์ของ Snake ครบชุด (stage ไว้งาน C, Dart ยังไม่เรียกใช้); build = com.aether/minSdk28/arm64-only/R8-OFF/CI-debug-keystore; `app/build.gradle` ล็อก GAME 56.23.2
+- `tools/call_linkage/` (3,485 บรรทัด) + `tests/`: toolkit L1–L6, CI เขียว 16/16
+- EVIDENCE_CHAIN §B/§3 ที่ว่า package.conf = "Java serialize" **ผิด** — ของจริง custom binary (ยืนยันใน §7)

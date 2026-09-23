@@ -11,8 +11,8 @@ import java.lang.reflect.Proxy
 /**
  * ServiceBinderProxy — binder proxy layer แบบ SNAKE (bt0/j8/ob parity)
  *
- * กลไก (สกัดจริงจาก jadx — transcript: reference/NATIVE_CALLSITE_MAP.md §5,
- *  T1 class/sig: reference/snake/F2_dex_natives.txt; ตัวเลขบรรทัด jadx = T2 — audit C16):
+ * กลไก (สกัดจริงจาก jadx — snake.zip: snake/NATIVE_CALLSITE_MAP.md §5 +
+ *  snake/EVIDENCE_CHAIN.md §0; dex ตรวจซ้ำด้วย classes.dex ใน Codes.zip):
  *   1. realIface = IXxx$Stub.asInterface(ServiceManager.getService(key))
  *      (= SNAKE ob.h(): d30.java:6 / b40.java:28 — delegate ตัวจริง ไม่ใช่ raw binder)
  *   2. proxy = java.lang.reflect.Proxy(iInterfaceClass, handler)  (= ob.b():15)
@@ -24,9 +24,15 @@ import java.lang.reflect.Proxy
  *      uu0.m1.b/l1.b, tz.java:451) เพราะ ActivityManager ไม่อ่าน sCache
  *   5. handler delegate = method.invoke(realIface, args) (= ob.invoke fallback)
  *
- * Services ที่ init() ติดตั้งจริง 11 ตัว (constants มี 40 — SNAKE 48):
+ * Services ที่ init() ติดตั้งจริง 15 ตัว:
  * activity package jobscheduler mount user account location notification
- * shortcut usagestats window — ตรง 11 ตัวที่ guest 8BP/GMS เรียกใน crash trace
+ * shortcut usagestats window (ชุดเดิม — ตรงที่ guest 8BP/GMS เรียกใน crash trace)
+ * + activity_task (ATMS จำเป็นบน Android 10+ — startActivity ไม่ผ่าน "activity"
+ * แล้ว) + connectivity (IConnectivityManager อยู่ใน 26 Stub$Proxy ของ Snake) +
+ * packageinstaller (IPackageInstaller* ใน 26 — รองรับ installer (H)) +
+ * alarm (AlarmManagerScheduler ของ datatransport ใน guest manifest)
+ * NOTE: "26 Stub$Proxy" ใน dex = callback interfaces (receivers/observers/
+ * callbacks) ไม่ใช่ 26 services — อย่าขยายตามชื่อนั้น (ดู audit §8)
  */
 object ServiceBinderProxy {
 
@@ -73,6 +79,8 @@ object ServiceBinderProxy {
     const val SERVICE_CLIPBOARD_PRIMARY = "primary_clipboard_manager"
     const val SERVICE_SHORTCUT      = "shortcut_service"
     const val SERVICE_USAGE_STATS   = "usage_stats_manager"
+    const val SERVICE_ACTIVITY_TASK = "activity_task_manager"
+    const val SERVICE_PACKAGE_INSTALLER = "package_installer"
 
     private val ALL_SERVICES = listOf(
         SERVICE_ACTIVITY, SERVICE_PACKAGE, SERVICE_JOB, SERVICE_STORAGE,
@@ -85,7 +93,8 @@ object ServiceBinderProxy {
         SERVICE_PRINT, SERVICE_SEARCH, SERVICE_APPWIDGET, SERVICE_WALLPAPER,
         SERVICE_ACCESSIBILITY, SERVICE_RESTRICTIONS, SERVICE_BATTERY,
         SERVICE_NETWORK_STATS, SERVICE_DISPLAY, SERVICE_CLIPBOARD_PRIMARY,
-        SERVICE_SHORTCUT, SERVICE_USAGE_STATS
+        SERVICE_SHORTCUT, SERVICE_USAGE_STATS,
+        SERVICE_ACTIVITY_TASK, SERVICE_PACKAGE_INSTALLER
     )
 
     // ─── Cache ───
@@ -117,7 +126,7 @@ object ServiceBinderProxy {
     // ══════════════════════════════════════════
 
     /**
-     * Initialize all 8 service proxies
+     * Initialize service proxies (15 — see class KDoc for the evidence)
      * @param context — Application context
      * @param fakePkg — Package name ปลอม (ถ้าต้องการ override)
      */
@@ -141,6 +150,10 @@ object ServiceBinderProxy {
             createProxyForService(SERVICE_SHORTCUT, svcManager, "shortcut")
             createProxyForService(SERVICE_USAGE_STATS, svcManager, "usagestats")
             createProxyForService(SERVICE_WINDOW, svcManager, "window")
+            createProxyForService(SERVICE_ACTIVITY_TASK, svcManager, "activity_task")
+            createProxyForService(SERVICE_NETWORK, svcManager, "connectivity")
+            createProxyForService(SERVICE_PACKAGE_INSTALLER, svcManager, "packageinstaller")
+            createProxyForService(SERVICE_ALARM, svcManager, "alarm")
 
             Log.i(TAG, "Initialized ${proxyCache.size} service proxies")
         } catch (e: Exception) {
@@ -209,7 +222,7 @@ object ServiceBinderProxy {
 
     /**
      * chainCheck ใช้พิสูจน์ "callต่อไป": sCache ของ process นี้มี wrapper ของเรา
-     * จริงกี่ key จาก 11 — OK=wrapper / REAL=ของจริงครอง / EMPTY=ไม่มี
+     * จริงกี่ key (ทั้งหมดที่ install) — OK=wrapper / REAL=ของจริงครอง / EMPTY=ไม่มี
      */
     fun sCacheVerify(): String {
         val cache = serviceManagerCache() ?: return "sCache UNAVAILABLE (hidden-API?)"
@@ -262,6 +275,10 @@ object ServiceBinderProxy {
         SERVICE_SHORTCUT -> "shortcut"
         SERVICE_USAGE_STATS -> "usagestats"
         SERVICE_WINDOW -> "window"
+        SERVICE_ACTIVITY_TASK -> "activity_task"
+        SERVICE_NETWORK -> "connectivity"
+        SERVICE_PACKAGE_INSTALLER -> "packageinstaller"
+        SERVICE_ALARM -> "alarm"
         else -> null
     }
 
@@ -541,6 +558,18 @@ object ServiceBinderProxy {
                 return handleUsageStatsCall(method, args)
             }
 
+            // ── ActivityTaskManager (Android 10+: startActivity/socket ผ่านนี่) ──
+            if (serviceName == SERVICE_ACTIVITY_TASK) {
+                return handleActivityTaskCall(method, args)
+            }
+
+            // ── Evidence-led pass-throughs (caller-contract delegate) ──
+            if (serviceName == SERVICE_NETWORK ||
+                serviceName == SERVICE_PACKAGE_INSTALLER ||
+                serviceName == SERVICE_ALARM) {
+                return delegateWithCallerContract(method, args)
+            }
+
             // ── Default: delegate to real IInterface (ob.invoke fallback) ──
             return try {
                 method.invoke(realIface, *(args ?: emptyArray()))
@@ -752,6 +781,47 @@ object ServiceBinderProxy {
             }
         }
 
+        /**
+         * P1 batch 4: caller-contract delegate — single source สำหรับ services
+         * ใหม่ (existing 3 handlers คงของเดิมไว้ byte-identical: shortcut มี
+         * ParceledListSlice fallback, usagestats กลืนทุก exception — semantics
+         * ต่างกัน รวมไม่ได้จนกว่า device proof จะยืนยัน)
+         */
+        private fun delegateWithCallerContract(method: Method, args: Array<out Any>?): Any? {
+            return try {
+                val effectiveArgs = if (method.name in CALLER_SPOOF_METHODS &&
+                    overridePackage.isNotEmpty()) {
+                    args?.map { arg ->
+                        if (arg is String && arg == overridePackage) originalPackage else arg
+                    }?.toTypedArray()
+                } else args
+                method.invoke(realIface, *(effectiveArgs ?: emptyArray()))
+            } catch (e: java.lang.reflect.InvocationTargetException) {
+                Log.w(TAG, "$serviceName proxy rethrow ${method.name}: " +
+                    "${e.cause?.javaClass?.simpleName}: ${e.cause?.message}")
+                throw (e.cause as? Exception) ?: Exception(e)
+            } catch (e: Exception) {
+                Log.w(TAG, "$serviceName proxy call failed ${method.name}: " +
+                    "${e.javaClass.simpleName}: ${e.message}")
+                null
+            }
+        }
+
+        /**
+         * P1 batch 4: ATMS (API 29+) — hook A เดียวกับ handleActivityCall:
+         * startActivity ผ่าน activity_task บน Android 10+; rewrite guest
+         * component → stub ก่อนส่ง (pre-Q: getService คืน null → ข้ามอัตโนมัติ)
+         */
+        private fun handleActivityTaskCall(method: Method, args: Array<out Any>?): Any? {
+            val activityish = method.name.startsWith("startActivity") ||
+                method.name.startsWith("startActivities") ||
+                method.name == "startActivityAsUser"
+            if (activityish && overridePackage.isNotEmpty() && args != null) {
+                rewriteGuestIntents(args)
+            }
+            return delegateWithCallerContract(method, args)
+        }
+
     }
 
     // ══════════════════════════════════════════
@@ -798,7 +868,7 @@ object ServiceBinderProxy {
                 "notification"-> "android.app.INotificationManager"
                 "telephony"   -> "android.telephony.ITelephony"
                 "wifi"        -> "android.net.wifi.IWifiManager"
-                "network"     -> "android.net.ConnectivityManager"
+                "connectivity"  -> "android.net.IConnectivityManager"
                 "power"       -> "android.os.IPowerManager"
                 "alarm"       -> "android.app.IAlarmManager"
                 "input"       -> "android.view.IInputManager"
@@ -828,6 +898,8 @@ object ServiceBinderProxy {
                 "primary_clip"-> "android.content.IPrimaryClip"
                 "shortcut"    -> "android.content.pm.IShortcutService"
                 "usagestats"  -> "android.app.usage.IUsageStatsManager"
+                "activity_task" -> "android.app.IActivityTaskManager"
+                "packageinstaller" -> "android.content.pm.IPackageInstaller"
                 else -> return null
             }
             Class.forName(className)

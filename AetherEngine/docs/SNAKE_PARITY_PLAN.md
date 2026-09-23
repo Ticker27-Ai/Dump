@@ -23,7 +23,7 @@
 1. Authority → `"%s.proxy_content_provider_%d"`; keys → `_S_|_target_/_P_target_/_user_id_*` (+bundle `SnakeEngine_client_config`); คง `:engine` ไว้ (ถูกแล้ว)
 2. ใช้ p3-map จาก jadx (`m/n/o/p/q/r/s`) แทนการเดา; แก้คอมเมนต์ `a7.w/u` → `r1.w/a7.u` + ถอดเลขบรรทัดที่พิสูจน์ไม่ได้
 3. Stub-name builder ตาม format strings (`%s.helper.ProxyActivity$P%d%s` + 3 แบบ + provider)
-4. Sandbox layout + conf 7 ไฟล์ตาม kv0; binder wrappers ขยาย 11 → 26 ตามรายชื่อ `$Stub$Proxy`
+4. Sandbox layout + conf 7 ไฟล์ตาม kv0; binder wrappers ขยาย 11 → 15 ตามหลักฐาน (activity_task + connectivity + packageinstaller + alarm — ดู audit §8 ว่า "26 Stub$Proxy" ไม่ใช่รายชื่อ services)
 5. `package.conf`: ทิ้ง dual-parser → รองรับ Java-serialized profile (หรือ opaque + serialize ของตัวเอง)
 6. ถอด `8BP`/Miniclip-game ออกจาก core (ย้ายไป guest-spec ถ้ายังต้องการ)
 - **Gate G1**: `chainCheck` ผ่าน + CI เขียว + grep ไม่เหลือคำอ้าง parity ผิด ๆ — **Flex**: ข้อไหนกระทบรันไทม์ → แยก flag `parityXX` เปิด/ปิดได้
