@@ -9,21 +9,30 @@ import android.util.Log
 /**
  * GuestProcessRegistry — SNAKE a7.m()/p3/jv0.P2 parity (ขั้น ② ของแผนประกอบ)
  *
- * provenance (audit C16): ตัวเลขบรรทัด jadx (a7.java:171/317/601, jv0.P2:285 ฯลฯ)
- * มาจาก T2 transcript — ตอนนี้ commit ไว้ที่ reference/NATIVE_CALLSITE_MAP.md
- * แล้ว; T1 ที่ machine-verify ได้ = reference/snake/F2_dex_natives.txt (class+sig
- * ระดับ DexLayout) — sig ตรวจซ้ำด้วย scripts/native_chain_parity.py ทุก preflight
+ * provenance (audit C16 — P1 batch 2 ยืนยันจากของจริง): snake.zip (ราก repo)
+ * → snake/NATIVE_CALLSITE_MAP.md §3 hops 10–12 + §5 (jadx-verified) +
+ * snake/EVIDENCE_CHAIN.md §0–3; dex ตรวจซ้ำด้วย classes.dex ใน Codes.zip
+ * (SNAKE_EVIDENCE_AUDIT.md §6.3 Entry A–J)
  *
- * หลักฐาน (NATIVE_CALLSITE_MAP.md §3 hops 10–12):
- *   a7.java:171 m(): Bundle "SnakeEngine_client_config" ← p3 → ContentResolver.call(
- *     content://com.snake.proxy_content_provider_<slot>, "_Engine_|_init_process_")
- *   → ANDROID เป็นฝ่าย spawn :pN เพราะ provider ถูก touch (ไม่ใช่ startActivity)
- *   ProxyContentProvider.java:15-28 (child): call → jv0.P2(p3) → ตอบ Bundle
- *     "_Engine_|_client_" = asBinder() ของ child → server linkToDeath คุมชีพ
- *   jv0.java:283-297 P2(): reject ถ้า config pkg ใหม่คนละกับที่ process ผูกไว้
+ * หลักฐาน (CALLSITE_MAP §3):
+ *   hop 10 — a7.java:292 u(): d7.b(uid,pkgIdx) key → reuse-slot หรือ l()
+ *     เลือก 0..3 ที่ไม่ชนชื่อ process รันอยู่ → หมด = "No processes available"
+ *   hop 11 — a7.java:171 m(): p3 config → Bundle "SnakeEngine_client_config"
+ *     → ContentResolver.call(content://com.snake.proxy_content_provider_N,
+ *     "_Engine_|_init_process_") → ANDROID spawn :pN เองเพราะ provider touch
+ *   hop 12 — ProxyContentProvider.java:15 (child): call → jv0.B2().P2(p3)
+ *     เก็บ config + ตรวจ pkg ("Reject init process") → ตอบ "_Engine_|_client_"
+ *     = asBinder() ของ jv0 → server linkToDeath คุมชีพ
+ *   (เลข a7.java:317/601 รอบก่อนมาจาก T2 transcript — แผนที่จริงแก้เป็น 292;
+ *   601 ไม่มีในแผนที่ — ถอดออกจนกว่า jadx_out จะยืนยัน)
  *
- * p3 field map (p3.java:6-13): m=pkg o=slot r=userId — Aether ยังไม่มี
- * virtual-UID (p3.p/q ของ SNAKE มาจาก x6.y2 — ขึ้นกับขั้น PMS เสมือน)
+ * p3 field map (CALLSITE_MAP §5, จาก yj0.a() builder — เต็ม):
+ *   m=guest pkg (E2()) → guestPkg ✓ · n=processName (เราประกอบ "<pkg>:pN" เอง)
+ *   o=slot (F2()/G2()) → slot ✓ · r=userId (N2()) → userId ✓
+ *   p=guest UID จาก x6.y2 (J2() ตาม §5; hop 22 เขียน J2()=q — เอกสารขัดกันเอง
+ *     รอ jadx_out) · q=server myUid · s=caller token f(pid,pkg) (K2())
+ *   → p/q รอขั้น PMS เสมือน (P1/P2); s-role = clientBinder ที่ child ตอบกลับ
+ *   ใน BUNDLE_CLIENT (ฝั่งถือ binder = เจ้าของ slot)
  *
  * ข้อได้เปรียบเชิงลำดับ: config ถึง child *ตอน provider install* ซึ่งอยู่ใน
  * bindApplication ของ framework — ก่อน activity dispatch ใด ๆ (intent extras
@@ -162,7 +171,8 @@ object GuestProcessHolder {
     var config: ClientConfig? = null
         private set
 
-    /** binder ให้ server linkToDeath — SNAKE jv0 (extends h00.a = Binder) */
+    /** binder ให้ server linkToDeath — SNAKE jv0 (extends h00.a = Binder);
+     *  ทำหน้าที่ p3.s-role (caller token): ฝั่งที่ถือ binder นี้ = เจ้าของ slot */
     private val clientBinder = Binder()
 
     /** fallback path (handshake ล้ม): seed จาก intent extras ของ ProxyActivity
