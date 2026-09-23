@@ -19,12 +19,14 @@ import java.io.File
  * Pure JVM (no Android deps).
  */
 object SystemConf {
-    val UID_CONF: ByteArray = byteArrayOf(1, 0, 0, 0, 0, 0, 0, 0)
+    val UID_CONF: ByteArray = byteArrayOf(0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
     val USER_CONF: ByteArray = byteArrayOf(
-        1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        -1, -1, -1, -1, 0, 0, 0, 0, 0, 0, 0, 0,
+        0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(),
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     )
-    val SHARED_USER_CONF: ByteArray = byteArrayOf(0, 0, 0, 0)
+    val SHARED_USER_CONF: ByteArray = byteArrayOf(0x00, 0x00, 0x00, 0x00)
 
     /** Write missing files only. Returns name -> size present afterwards. */
     fun writeDefaults(systemDir: File): Map<String, Int> {
