@@ -37,6 +37,18 @@ class EngineApi {
     }
   }
 
+  /// ติดตั้ง guest เข้า sandbox (H): verify PMS + bootstrap (dirs + confs)
+  /// คืน Map{ok, versionName, versionCode, confBytes, systemConfs, cmdline, reason}
+  static Future<Map<String, dynamic>> installGuest(String packageName) async {
+    try {
+      final m = await _ch.invokeMapMethod<String, dynamic>(
+          'installGuest', {'packageName': packageName});
+      return m == null ? {'ok': false} : Map<String, dynamic>.from(m);
+    } on PlatformException {
+      return {'ok': false};
+    }
+  }
+
   /// รหัสเครื่อง (ANDROID_ID — แสดงผลใน UI อย่างเดียว, ไม่ส่งออก)
   static Future<String> getDeviceId() async {
     try {

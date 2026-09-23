@@ -1,13 +1,17 @@
 // main.dart — จอหลัก AetherEngine (Flutter shell)
 //
-// [SCAFFOLD 2026-09-23] เขียนใหม่ทั้งไฟล์ — UI เริ่มต้นแบบ offline:
-// แสดง device id + สถิติ engine + ปุ่ม self-test (VirtualFS/handshake)
-// + ตัวอ่าน diag — ไม่มีจอ login/license/topup (ดู docs/CUTS.md)
+// [P1 close 2026-09-23] เพิ่ม guest card (8 Ball Pool 56.23.2) + ปุ่ม
+// ติดตั้ง (H) / เปิดเกม (G) / chain — คงแผง diag เดิมไว้รอบ P4
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'engine_api.dart';
+
+/// Guest เป้าหมาย (ล็อกตามแผน — eightballpool 56.23.2)
+const String kGuestPkg = 'com.miniclip.eightballpool';
+const String kGuestLabel = '8 Ball Pool';
+const String kGuestVersion = '56.23.2';
 
 void main() => runApp(const AetherApp());
 
@@ -15,7 +19,7 @@ class AetherApp extends StatelessWidget {
   const AetherApp({super.key});
 
   @override
-Widget build(BuildContext context) {
+  Widget build(BuildContext context) {
     return MaterialApp(
       title: 'AetherEngine',
       theme: ThemeData(colorSchemeSeed: Colors.teal, useMaterial3: true),
@@ -36,6 +40,9 @@ class _HomePageState extends State<HomePage> {
   Map<String, dynamic> _stats = {};
   String _report = '';
   bool _busy = false;
+  bool _installed = false;
+  Map<String, dynamic>? _gameInfo;
+  Map<String, dynamic>? _installResult;
 
   @override
   void initState() {
@@ -43,16 +50,21 @@ class _HomePageState extends State<HomePage> {
     _refresh();
   }
 
-  /// ดึง device id + stats ใหม่ (in-process ผ่าน MethodChannel)
+  /// ดึง device id + stats + สถานะ guest ใหม่
   Future<void> _refresh() async {
     setState(() => _busy = true);
     try {
       final id = await EngineApi.getDeviceId();
       final stats = await EngineApi.getEngineStats();
+      final installed = await EngineApi.isTargetInstalled(kGuestPkg);
+      final info =
+          installed ? await EngineApi.getInstalledGameInfo(kGuestPkg) : null;
       if (!mounted) return;
       setState(() {
         _deviceId = id;
         _stats = stats;
+        _installed = installed;
+        _gameInfo = info;
       });
     } catch (e) {
       debugPrint('refresh failed: $e');
@@ -61,8 +73,8 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  /// รันคำสั่งแล้วเอาข้อความมาโชว์ในแผงรายงาน
-  Future<void> _run(String label, Future<String> Function() fn) async {
+  /// รันคำสั่งแล้วเอาผลมาโชว์ในแผงรายงาน
+  Future<void> _run(String label, Future<Object?> Function() fn) async {
     setState(() => _busy = true);
     try {
       final out = await fn();
@@ -77,9 +89,23 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  Future<void> _install() async {
+    await _run('ติดตั้ง guest (H)', () async {
+      final m = await EngineApi.installGuest(kGuestPkg);
+      if (mounted) setState(() => _installResult = m);
+      return m;
+    });
+  }
+
+  Future<void> _launch() async {
+    await _run('เปิดเกม (G)', () => EngineApi.launchInSandbox(kGuestPkg));
+  }
+
   @override
   Widget build(BuildContext context) {
     final rows = _stats.entries.toList();
+    final ver = _gameInfo?['versionName']?.toString() ?? '—';
+    final verOk = ver == kGuestVersion;
     return Scaffold(
       appBar: AppBar(
         title: const Text('AetherEngine'),
@@ -94,6 +120,58 @@ class _HomePageState extends State<HomePage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          Card(
+            child: ListTile(
+              leading: Icon(
+                _installed
+                    ? Icons.sports_esports
+                    : Icons.sports_esports_outlined,
+                size: 40,
+              ),
+              title: const Text(kGuestLabel),
+              subtitle: Text(_installed
+                  ? 'ติดตั้งแล้ว · เวอร์ชัน $ver${verOk ? '' : ' (ต้องการ $kGuestVersion)'}'
+                  : 'ยังไม่ติดตั้ง — sideload APK ก่อน (no-root)'),
+              trailing: _installed
+                  ? const Icon(Icons.check_circle, color: Colors.green)
+                  : const Icon(Icons.warning, color: Colors.orange),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              ElevatedButton.icon(
+                onPressed: _busy ? null : _install,
+                icon: const Icon(Icons.download),
+                label: const Text('ติดตั้ง'),
+              ),
+              ElevatedButton.icon(
+                onPressed: (_busy || !_installed) ? null : _launch,
+                icon: const Icon(Icons.play_arrow),
+                label: const Text('เปิดเกม'),
+              ),
+              ElevatedButton.icon(
+                onPressed: _busy
+                    ? null
+                    : () => _run('chainCheck',
+                        () => EngineApi.chainCheck(kGuestPkg)),
+                icon: const Icon(Icons.link),
+                label: const Text('chain'),
+              ),
+              if (_installResult != null)
+                Chip(
+                  avatar: Icon(
+                    _installResult!['ok'] == true ? Icons.check : Icons.close,
+                    size: 16,
+                  ),
+                  label: Text('sandbox: ${_installResult!['confBytes'] ?? 0}B'),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
           Card(
             child: ListTile(
               leading: const Icon(Icons.smartphone),
@@ -136,7 +214,8 @@ class _HomePageState extends State<HomePage> {
               ElevatedButton(
                 onPressed: _busy
                     ? null
-                    : () => _run('VirtualFS self-test', EngineApi.testVirtualFS),
+                    : () =>
+                        _run('VirtualFS self-test', EngineApi.testVirtualFS),
                 child: const Text('VirtualFS'),
               ),
               ElevatedButton(

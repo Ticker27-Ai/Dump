@@ -468,6 +468,60 @@ object AetherOrchestrator {
      * Shutdown orchestrator + all subsystems
      */
     // ══════════════════════════════════════════
+    //  Guest Install (H) — no-root: guest APK sideload ไว้แล้วบนเครื่อง;
+    //  "install" = verify PMS + bootstrap sandbox ทั้งชุด (idempotent)
+    // ══════════════════════════════════════════
+    fun installGuest(context: Context, targetPkg: String): Map<String, Any> {
+        val out = LinkedHashMap<String, Any>()
+        out["packageName"] = targetPkg
+        if (!isInitialized.get()) {
+            out["ok"] = false
+            out["reason"] = "engine not initialized"
+            return out
+        }
+        if (targetPkg.isEmpty()) {
+            out["ok"] = false
+            out["reason"] = "empty package"
+            return out
+        }
+        return try {
+            // 1. guest ต้องติดตั้งจริงบนเครื่อง (no-root track หลัก)
+            val pi = try {
+                context.packageManager.getPackageInfo(targetPkg, 0)
+            } catch (e: android.content.pm.PackageManager.NameNotFoundException) {
+                out["ok"] = false
+                out["reason"] = "not installed on device — sideload the game APK first"
+                return out
+            }
+            out["versionName"] = pi.versionName ?: "unknown"
+            out["versionCode"] = pi.longVersionCode
+            // 2. bootstrap sandbox ทั้งชุด (dirs + package.conf + system confs
+            //    + cmdline + device token — ทำซ้ำได้ ไม่ทับของเดิมยกเว้น cmdline)
+            SandboxManager.bootstrapGameData(targetPkg)
+            val root = SandboxManager.getSandboxRoot()
+            val conf = if (root != null) java.io.File(root, "data/app/$targetPkg/package.conf") else null
+            out["confBytes"] = if (conf != null && conf.exists()) conf.length() else 0L
+            out["systemConfs"] = if (root != null)
+                com.aether.SystemConf.verify(java.io.File(root, "system")).toString()
+            else "{}"
+            out["cmdline"] = if (root != null)
+                (com.aether.SystemConf.readCmdline(java.io.File(root, "proc/0")) ?: "")
+            else ""
+            out["sandboxRoot"] = root?.absolutePath ?: ""
+            val ok = (out["confBytes"] as Long) > 0
+            out["ok"] = ok
+            out["reason"] = if (ok) "installed" else "package.conf empty — see logcat"
+            Log.i(TAG, "installGuest($targetPkg) -> $out")
+            out
+        } catch (e: Throwable) {
+            Log.e(TAG, "installGuest failed: ${e.message}")
+            out["ok"] = false
+            out["reason"] = (e.javaClass.simpleName + ": " + e.message)
+            out
+        }
+    }
+
+    // ══════════════════════════════════════════
     //  Sandbox Launch
     //  Flow: bootstrap target → mount sandbox → startActivity ใน process :p0
     // ══════════════════════════════════════════

@@ -17,18 +17,18 @@ import java.security.SecureRandom
  * (dataDir root ตรง — ชื่อ "root" ≡ blueprint L0; snake ใช้ getExternalFilesDir("root")
  *  lv0.java:72 — เส้นทางเต็มเทียบตอน P2)
  *
- * โครงสร้าง (ตาม blueprint จาก data dump analysis):
+ * โครงสร้าง (P1 close — ตรวจกับ com.snake.zip ตรงทุกจุด):
  *   root/
- *   ├── data/app/<pkg>/                    ← package.conf (manifest snapshot)
+ *   ├── data/app/<pkg>/{package.conf,lib/}  ← snapshot + lib dir (มีทั้งคู่ใน dump)
  *   ├── data/user/0/<pkg>/
  *   │   ├── a0rjgdfbjd8fhfglkew6/<ver>/arm64-v8a/  ← PGL modules
  *   │   ├── 706d4946...<hash>/ed9d...      ← encrypted device token
  *   │   ├── j9g29zqf0cfqd3vvu2bw/          ← profile/cache dir
  *   │   ├── files/ shared_prefs/ databases/ cache/ no_backup/ code_cache/
  *   │   ├── app_textures/ app_webview_0:.../
- *   ├── data/user_de/0/<pkg>/
- *   ├── proc/0/                            ← engine เขียนเมื่อ virtual-UID พร้อม
- *   └── system/                            ← ว่างตอนเปิด (≡ T1 com.snake.zip)
+ *   ├── data/user_de/0/<pkg>/shared_prefs/
+ *   ├── proc/0/cmdline                     ← raw guest pkg (ไม่มี NUL ต่อท้าย)
+ *   └── system/{uid,user,shared-user}.conf ← bootstrap records (bytes ตรง dump)
  */
 object SandboxManager {
 
@@ -166,9 +166,11 @@ object SandboxManager {
      * — ตาม blueprint ต้นแบบ (SNAKE lv0.p: root/data/app/<pkg>/package.conf
      * ที่ engine เขียนตอน install หลัง PackageParser.parse + collectCertificates).
      *
-     * format: UTF-16LE header (classloader name) + UTF-8 length-prefixed body
-     * (component names + metadata + version + apk path) — ตรงกับที่
-     * PackageConfParser อ่าน (dual-encoding — test ยืนยัน)
+     * format: AETHER SNAPSHOT STREAM (ของเราเอง — int32-len UTF-16 header +
+     * UTF-8 body) เนื้อหาจาก live PMS ของเครื่องนี้ — ตรงกับที่
+     * PackageConfParser อ่าน (self-consistent pair) แต่ยังไม่ใช่ไบนารี
+     * ต้นแบบ (u32=31 + u16len UTF-16 records + class tags — audit §7);
+     * byte-parity = P3 (รอ framing spec ครบ)
      *
      * ไม่ใช่ stub/คัดลอกไฟล์ข้ามเครื่อง — สร้างจากข้อมูลจริงของเครื่องนี้
      * (per-install: sourceDir/signature/versionCode ต่างกันทุกเครื่อง)
@@ -274,10 +276,11 @@ object SandboxManager {
         val encDir = File(pkgDir, ENC_DIR_BASE)
         encDir.mkdirs()
         File(pkgDir, CACHE_DIR_HASH).mkdirs()
-        // data/app/<pkg>/ — package.conf
+        // data/app/<pkg>/{package.conf,lib/} — dump มีทั้งคู่ (P1 close)
         File(root, "data/app/$targetPkg").mkdirs()
-        // data/user_de
-        File(root, "data/user_de/0/$targetPkg").mkdirs()
+        File(root, "data/app/$targetPkg/lib").mkdirs()
+        // data/user_de — dump มีแค่ shared_prefs ใต้ pkg (P1 close)
+        File(root, "data/user_de/0/$targetPkg/shared_prefs").mkdirs()
         // /system conf dir: ≡ T1 (com.snake.zip: root/system ว่างตอนเปิด)
         // /proc: ไม่สร้างตอนเปิด — จะมาพร้อม virtual-UID (P4+) ที่มี parser จริง
         File(root, "system").mkdirs()
@@ -442,12 +445,13 @@ object SandboxManager {
             //    path ทำให้เกมเขียนลง sandbox เอง (SNAKE dump พิสูจน์: ไฟล์เกม
             //    ใน sandbox ต้นแบบ = เกมสร้างตอน runtime)
 
-            // 5. fake /proc + /system — T1 (com.snake.zip ดัมป์ตอนเปิดแอพ 13:17):
-            //    ต้นแบบมีแค่ root/{cache,data,data/app,system} เป็น dir ว่าง;
-            //    ไม่มี proc/** และไม่มี *.conf ใด ๆ ตอนเปิด — ของเก่าที่เขียน here
-            //    (cmdline + uid/user/shared-user) = fabrication ไร้ consumer (grep
-            //    ยืนยัน: ไม่มีโค้ดอ่าน) → ตัด; จะกลับมาพร้อม virtual-UID (P4+)
-            //    เมื่อมี parser ที่อ่านจริง ≡ x6/y6 ฝั่งต้นแบบ
+            // 5. system confs + proc cmdline (P1 batch 5 close — bytes ตรง dump,
+            //    semantics opaque): writer สร้างเฉพาะไฟล์ที่ขาด (ไม่ทับของเดิม);
+            //    cmdline เขียนใหม่ทุกครั้งตาม guest; consumer จริง = chainCheck
+            //    hop [7] + installGuest report (integrity telemetry)
+            val sysWritten = SystemConf.writeDefaults(File(root, "system"))
+            val cmdOk = SystemConf.writeCmdline(File(root, "proc/0"), targetPkg)
+            Log.i(TAG, "system confs=$sysWritten cmdline=$cmdOk ($targetPkg)")
 
             android.util.Log.i(TAG, "Sandbox bootstrapped at ${root.absolutePath} (pkg=$targetPkg)")
         } catch (e: Exception) {

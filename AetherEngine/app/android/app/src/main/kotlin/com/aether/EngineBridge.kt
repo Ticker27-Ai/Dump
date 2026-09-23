@@ -92,6 +92,9 @@ object EngineBridge : MethodCallHandler {
                 "launchInSandbox" -> result.success(launchInSandbox(
                     call.argument<String>("packageName") ?: ""
                 ))
+                "installGuest" -> result.success(installGuest(
+                    call.argument<String>("packageName") ?: ""
+                ))
                 "readDiag" -> result.success(readDiag())
                 "chainCheck" -> result.success(chainCheck(
                     call.argument<String>("packageName") ?: ""
@@ -331,6 +334,22 @@ object EngineBridge : MethodCallHandler {
     }
 
     /**
+     * installGuest (H) — no-root install: verify device PMS + bootstrap the
+     * full sandbox (dirs + package.conf + system confs + cmdline + token).
+     * Returns Map{ok, packageName, versionName, versionCode, confBytes, ...}.
+     */
+    private fun installGuest(packageName: String): Map<String, Any> {
+        val c = ctx
+        if (c == null) return mapOf("ok" to false, "reason" to "no context")
+        return try {
+            com.aether.engine.proxy.AetherOrchestrator.installGuest(c, packageName)
+        } catch (e: Throwable) {
+            Log.e(TAG, "installGuest($packageName) failed: ${e.message}")
+            mapOf("ok" to false, "reason" to (e.javaClass.simpleName + ": " + e.message))
+        }
+    }
+
+    /**
      * audit C2: :pN เขียน files/diag/launch_result.json ข้าม process —
      * รอแบบ non-blocking บน background thread แล้วคืน Map{ok,stage,reason,identity,slot}
      */
@@ -463,6 +482,21 @@ object EngineBridge : MethodCallHandler {
                 c.packageManager.getPackageInfo(packageName, 0); "yes"
             } catch (_: Throwable) { "NO" })
         }
+        // hop7 (P1 close): sandbox conf integrity (SystemConf.verify + cmdline + package.conf)
+        sb.append("\n[7] ")
+        sb.append(try {
+            val root = com.aether.SandboxManager.getSandboxRoot()
+            if (root == null) "sandbox root=null (engine init pending)"
+            else {
+                val sys = com.aether.SystemConf.verify(java.io.File(root, "system"))
+                val cmd = com.aether.SystemConf.readCmdline(java.io.File(root, "proc/0")) ?: "-"
+                val pc = if (packageName.isNotEmpty())
+                    java.io.File(root, "data/app/$packageName/package.conf").let {
+                        if (it.exists()) "${it.length()}B" else "MISSING"
+                    } else "-"
+                "sys=$sys cmdline=$cmd package.conf=$pc"
+            }
+        } catch (e: Throwable) { "sandbox read failed: ${e.message}" })
         return sb.toString()
     }
 
