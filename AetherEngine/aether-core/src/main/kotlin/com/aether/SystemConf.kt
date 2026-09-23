@@ -5,7 +5,8 @@ import java.io.File
 /**
  * P1 batch 5 (close): system conf bootstrap records (kv0 layout).
  *
- * Evidence-exact bytes from com.snake.zip (root/system/*.conf + root/proc/0/cmdline):
+ * Evidence-exact bytes from com.snake.zip (root/system/: uid, user,
+ * shared-user confs + root/proc/0/cmdline):
  *   uid.conf          8 B: 01 00 00 00 00 00 00 00
  *   user.conf        28 B: 01 00 00 00 | 01 00 00 00 | 00*8 | FF FF FF FF | 00*8
  *   shared-user.conf  4 B: 00 00 00 00

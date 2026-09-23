@@ -11,10 +11,7 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
-# TEMP (revert after green): allow error-exfil (issue comment + repo push)
-permissions:
-  contents: write
-  issues: write
+
 
 jobs:
   toolkit-test:
@@ -131,21 +128,6 @@ jobs:
           retention-days: 3
           if-no-files-found: warn
 
-      # TEMP (revert after green): exfil the error excerpt via issue #1 —
-      # log + artifact download APIs are unreachable from the dev sandbox.
-      - name: Exfil error excerpt to issue #1 (on failure)
-        if: failure()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          cd AetherEngine
-          { echo "run ${{ github.run_id }} compile excerpt:"; echo '```'; grep -i -B2 -A10 '^e:\|FAILED\|error:\|FAILURE' gradle-compile.log | head -n 100; echo '```'; } > /tmp/excerpt.md
-          (gh issue comment 1 --body-file /tmp/excerpt.md || echo COMMENT_FAILED)
-          mkdir -p ci-errors-tmp && cp /tmp/excerpt.md ci-errors-tmp/${{ github.run_id }}.md
-          git config user.name 'ci-exfil' && git config user.email 'ci-exfil@local'
-          git add -f ci-errors-tmp/${{ github.run_id }}.md
-          git commit -m 'ci(temp): error excerpt ${{ github.run_id }}' || echo COMMIT_FAILED
-          (git push origin HEAD:${{ github.ref_name }} || echo PUSH_FAILED)
 
       - name: Flutter pub get
         run: flutter pub get
