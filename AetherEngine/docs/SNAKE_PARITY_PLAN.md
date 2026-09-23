@@ -24,6 +24,8 @@
 2. ใช้ p3-map จาก jadx (`m/n/o/p/q/r/s`) แทนการเดา; แก้คอมเมนต์ `a7.w/u` → `r1.w/a7.u` + ถอดเลขบรรทัดที่พิสูจน์ไม่ได้
 3. Stub-name builder ตาม format strings (`%s.helper.ProxyActivity$P%d%s` + 3 แบบ + provider)
 4. Sandbox layout + conf 7 ไฟล์ตาม kv0; binder wrappers ขยาย 11 → 15 ตามหลักฐาน (activity_task + connectivity + packageinstaller + alarm — ดู audit §8 ว่า "26 Stub$Proxy" ไม่ใช่รายชื่อ services)
+
+**P1 ปิดแล้ว 2026-09-23** (batch 1–5 + fix เขียว CI run 35808705857): handshake UID-check + p3 map ยืนยันตาม CALLSITE_MAP · G1 PM-identity fallback · LC0 license/c2 skeleton · G2 provider allow-list + flags · binders 11→15 · kv0 layout + SystemConf + installGuest(H) + UI ติดตั้ง/เปิดเกม — คงค้างเฉพาะ gates ที่ต้องใช้เครื่องจริง (G-NR, G-GMS experiment, G-LC3)
 5. `package.conf`: ทิ้ง dual-parser → รองรับ Java-serialized profile (หรือ opaque + serialize ของตัวเอง)
 6. ถอด `8BP`/Miniclip-game ออกจาก core (ย้ายไป guest-spec ถ้ายังต้องการ)
 - **Gate G1**: `chainCheck` ผ่าน + CI เขียว + grep ไม่เหลือคำอ้าง parity ผิด ๆ — **Flex**: ข้อไหนกระทบรันไทม์ → แยก flag `parityXX` เปิด/ปิดได้
